@@ -71,13 +71,14 @@ tests/
   fixtures/
     index.ts                 # Expõe os page objects como fixtures do Playwright
   pages/
-    BasePage.ts              # Operações comuns: New, Save, Delete, navegação
-    AccountPage.ts           # Interações específicas de Account
+    BasePage.ts              # Operações comuns: New, Save, Delete, navegação, erros de validação
+    AccountPage.ts           # Interações específicas de Account (28 campos tipados)
     AcomodacaoPage.ts        # Interações específicas de Acomodacao__c
   specs/
-    accounts.spec.ts         # Testes de CRUD de Account
+    accounts.spec.ts         # Testes de CRUD e validação de Account
     acomodacoes.spec.ts      # Testes de CRUD de Acomodacao__c
-  utils/                     # Helpers compartilhados e locators centralizados
+  utils/
+    SalesforceFields.ts      # Classes tipadas para campos de formulário (TextField, PicklistField, etc.)
 .env.example                 # Modelo de variáveis de ambiente
 playwright.config.ts         # Configuração do Playwright
 DOCS.md                      # Guia técnico de decisões e troubleshooting
@@ -89,8 +90,20 @@ DOCS.md                      # Guia técnico de decisões e troubleshooting
 
 Os testes seguem o padrão **Page Object Model (POM)**:
 
-- **`BasePage`** — operações genéricas do Salesforce (navegar para lista, abrir modal, salvar, deletar, aguardar record/list page)
+- **`BasePage`** — operações genéricas do Salesforce (navegar para lista, abrir modal, salvar, deletar, aguardar record/list page, erros de validação via `SalesforceValidationError`)
 - **`AccountPage` / `AcomodacaoPage`** — estendem `BasePage` com interações específicas de cada objeto
+- **`SalesforceFields.ts`** — classes tipadas que encapsulam todos os campos de formulário modal do Salesforce LWC. Cada classe expõe `fill()`/`select()`/`search()`, `clear()`, `expectValue()`, `expectEmpty()` e `inlineError`. **Todo campo de formulário modal deve obrigatoriamente usar uma dessas classes**:
+
+  | Classe                 | Tipo de campo                          | Elemento DOM                          |
+  | ---------------------- | -------------------------------------- | ------------------------------------- |
+  | `TextField`            | Texto, textarea                        | `<input type="text">` / `<textarea>`  |
+  | `PicklistField`        | Picklist padrão (Rating, Type…)        | `<button role="combobox">`            |
+  | `AddressPicklistField` | Geo-picklist de endereço (País/Estado) | `<input role="combobox">`             |
+  | `LookupField`          | Lookup (Parent Account…)               | `<input role="combobox">`             |
+  | `NumberField`          | Número, moeda, inteiro                 | `<input role="spinbutton">`           |
+  | `DateField`            | Data                                   | `<input type="text">` com máscara LWC |
+  | `CheckboxField`        | Checkbox                               | `<input type="checkbox">`             |
+
 - **`fixtures/index.ts`** — registra os page objects no sistema de fixtures do Playwright, injetando-os nos specs via parâmetros de função
 
 A autenticação utiliza `storageState` do Playwright: autentique uma vez com `npm run auth` e todas as execuções seguintes reutilizarão a sessão salva.

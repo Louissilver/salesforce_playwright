@@ -6,7 +6,7 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 export default defineConfig({
   testDir: './tests',
-  timeout: 30_000,
+  timeout: 60_000,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -20,8 +20,9 @@ export default defineConfig({
     trace: 'on',
     screenshot: 'only-on-failure',
     video: 'off',
-    actionTimeout: 30_000,
+    actionTimeout: 15_000,
     navigationTimeout: 60_000,
+    bypassCSP: true,
   },
 
   projects: [

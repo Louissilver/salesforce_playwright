@@ -23,10 +23,88 @@ tests/
     AccountPage.ts       # Account-specific interactions
     AcomodacaoPage.ts    # Acomodacao__c-specific interactions
   specs/                 # One file per Salesforce object
-  utils/                 # Shared helpers, centralized locators
+  utils/
+    SalesforceFields.ts  # Typed field wrapper classes — use for ALL modal form fields
 ```
 
 New Salesforce objects get their own `*Page.ts` extending `BasePage` and their own `*.spec.ts`.
+
+---
+
+## Typed Field Classes (`SalesforceFields.ts`) — MANDATORY
+
+**All modal form fields must be defined using the typed field classes from `tests/utils/SalesforceFields.ts`.** Never use raw Playwright locators directly inside page objects for form field interactions.
+
+| Class                  | Salesforce field type                           | DOM element                              |
+| ---------------------- | ----------------------------------------------- | ---------------------------------------- |
+| `TextField`            | Text, textarea                                  | `<input type="text">` / `<textarea>`     |
+| `PicklistField`        | Standard picklist (Rating, Type, Industry…)     | `<button role="combobox">`               |
+| `AddressPicklistField` | Geo-picklist (Billing/Shipping Country & State) | `<input role="combobox">`                |
+| `LookupField`          | Relationship lookup (Parent Account…)           | `<input role="combobox">`                |
+| `NumberField`          | Number, currency, integer                       | `<input role="spinbutton">`              |
+| `DateField`            | Date                                            | `<input type="text">` with LWC date mask |
+| `CheckboxField`        | Checkbox                                        | `<input type="checkbox">`                |
+
+Each class exposes a consistent API:
+
+- **`locator`** — the underlying Playwright `Locator`
+- **`undoButton`** — the "Undo" button for that field
+- **`inlineError`** — the `'Complete this field.'` message scoped to that field's listitem
+- **`fill(value)` / `select(option)` / `search(value)` / `check()` / `uncheck()`** — field interaction
+- **`clear()`** — resets the field to its empty state
+- **`expectValue(value)`** — web-first assertion: asserts the field displays the given value
+- **`expectEmpty()`** — web-first assertion: asserts the field is in its default empty state
+
+```typescript
+// ✅ Correct — declare typed field properties in the constructor
+import {
+  TextField,
+  PicklistField,
+  AddressPicklistField,
+  LookupField,
+  NumberField,
+  DateField,
+} from "../utils/SalesforceFields";
+
+export class AccountPage extends BasePage {
+  readonly accountNameField: TextField;
+  readonly ratingField: PicklistField;
+  readonly billingCountryField: AddressPicklistField; // geo-picklist: <input role="combobox">
+  readonly parentAccountField: LookupField;
+  readonly employeesField: NumberField;
+  readonly slaExpirationDateField: DateField;
+
+  constructor(page: Page) {
+    super(page);
+    this.accountNameField = new TextField(page, "Account Name");
+    this.ratingField = new PicklistField(page, "Rating");
+    this.billingCountryField = new AddressPicklistField(
+      page,
+      "Billing Country",
+    );
+    this.parentAccountField = new LookupField(page, "Parent Account");
+    this.employeesField = new NumberField(page, "Employees");
+    this.slaExpirationDateField = new DateField(page, "SLA Expiration Date");
+  }
+}
+
+// Usage in specs:
+await accountPage.accountNameField.fill("Acme Corp");
+await accountPage.ratingField.select("Hot");
+await accountPage.billingCountryField.select("Brazil");
+await accountPage.employeesField.expectValue(500);
+await accountPage.accountNameField.expectEmpty();
+await expect(accountPage.accountNameField.inlineError).toBeVisible();
+
+// ❌ Wrong — raw locators inside page objects for form fields
+this.accountNameField = page
+  .getByRole("dialog")
+  .getByRole("textbox", { name: "Account Name" });
+await this.accountNameField.fill("Acme Corp"); // skips clear(), no expectEmpty(), no inlineError
+```
+
+> **Why `AddressPicklistField` instead of `PicklistField` for address fields?**
+> Billing/Shipping Country and State/Province render as `<input role="combobox">` (no `textContent`) while standard picklists render as `<button role="combobox">`. `toContainText` only works on elements with text content; `AddressPicklistField` overrides `expectValue` and `expectEmpty` to use `toHaveValue` instead.
 
 ---
 
@@ -34,41 +112,96 @@ New Salesforce objects get their own `*Page.ts` extending `BasePage` and their o
 
 - **Never duplicate logic** between page classes. Shared operations (modal, save, delete, navigation, waiting) belong in `BasePage`.
 - If two page classes have the same method body, move it to `BasePage`.
-- Field-filling in modals uses the shared pattern below — do not inline locators in specs.
+- **Locators must be declared as `readonly` class properties** and initialized in the constructor — never built inline inside methods. This is the official Playwright POM pattern.
 
 ```typescript
-// BasePage — reusable modal field helper
-async fillModalField(label: string, value: string) {
-  await this.page.getByRole('dialog').getByRole('textbox', { name: label }).fill(value);
+// ✅ Correct — typed field class properties declared and initialized in constructor
+export class AccountPage extends BasePage {
+  readonly accountNameField: TextField;
+
+  constructor(page: Page) {
+    super(page);
+    this.accountNameField = new TextField(page, "Account Name");
+  }
+
+  async fillName(name: string) {
+    await this.accountNameField.fill(name);
+  }
+}
+
+// ❌ Wrong — raw Playwright locator for a form field
+export class AccountPage extends BasePage {
+  readonly accountNameField: Locator;
+
+  constructor(page: Page) {
+    super(page);
+    // Raw locator gives no clear(), inlineError, or expectEmpty()
+    this.accountNameField = page
+      .getByRole("dialog")
+      .getByRole("textbox", { name: "Account Name" });
+  }
 }
 ```
 
-- Subclasses call `fillModalField` instead of duplicating the locator chain:
+- `BasePage` declares shared element properties (`newButton`, `saveButton`, `deleteButton`, `actionsMenuButton`, `modal`) — subclasses inherit and use them directly.
+- `getListItem(name)` lives in `BasePage` because it is used by every object page — do not redeclare it in subclasses.
+- Subclass form field properties follow the pattern: `readonly <semanticName>Field: TextField | PicklistField | AddressPicklistField | LookupField | NumberField | DateField | CheckboxField`.
+
+---
+
+## JSDoc
+
+Every class and every public method in a page object **must** have a JSDoc block. Follow TypeScript/JSDoc industry conventions:
+
+- **Class**: one-line summary describing the object it represents.
+- **Property**: single-line `/** ... */` comment describing the element.
+- **Method**: summary line + `@param` for each parameter (when non-obvious) + `@returns` when the return type carries semantic meaning.
 
 ```typescript
-// AccountPage
-async fillName(name: string) {
-  await this.fillModalField('Account Name', name);
-}
+/**
+ * Page object for the Salesforce Account object.
+ * Covers CRUD operations on the Account list and record pages.
+ */
+export class AccountPage extends BasePage {
+  /** "Account Name" text field inside the New/Edit modal. */
+  readonly accountNameField: Locator;
 
-// AcomodacaoPage
-async fillNome(nome: string) {
-  await this.fillModalField('Nome de Acomodacao', nome);
+  /**
+   * Creates a new Account record end-to-end:
+   * opens the modal, fills the name, saves, and waits for the record page.
+   *
+   * @param name - Name for the new Account.
+   */
+  async createAccount(name: string) { ... }
+
+  /**
+   * Returns the name of the currently open record.
+   *
+   * @returns The record name extracted from the browser page title.
+   */
+  async getRecordTitle(): Promise<string> { ... }
 }
 ```
+
+Do **not** add JSDoc to:
+
+- `constructor` (self-explanatory)
+- Private/internal inline variables
+- Spec files (`*.spec.ts`) — test descriptions already document intent
 
 ---
 
 ## Locator Priority (strictly in this order)
 
-| Priority | Method                                                              | Use when                                            |
-| -------- | ------------------------------------------------------------------- | --------------------------------------------------- |
-| 1        | `getByRole('button', { name: 'Save', exact: true })`                | Buttons, links, checkboxes, comboboxes              |
-| 2        | `getByRole('dialog').getByRole('textbox', { name: 'Field Label' })` | Form fields inside modals                           |
-| 3        | `getByLabel('Label text')`                                          | Native HTML inputs **outside** Shadow DOM only      |
-| 4        | `getByText('...')`                                                  | Display-only text content                           |
-| 5        | `locator('.slds-modal')`                                            | SLDS structural class for modal container detection |
-| 6        | `locator("[data-aura-class='AuraComponentName']")`                  | When no ARIA attribute is available                 |
+| Priority | Method                                                              | Use when                                              |
+| -------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
+| 0        | `SalesforceFields.ts` typed class (`TextField`, `PicklistField`…)   | **All modal form fields — always use typed classes**  |
+| 1        | `getByRole('button', { name: 'Save', exact: true })`                | Buttons, links, checkboxes, comboboxes                |
+| 2        | `getByRole('dialog').getByRole('textbox', { name: 'Field Label' })` | Form fields inside modals (only inside field classes) |
+| 3        | `getByLabel('Label text')`                                          | Native HTML inputs **outside** Shadow DOM only        |
+| 4        | `getByText('...')`                                                  | Display-only text content                             |
+| 5        | `locator('.slds-modal')`                                            | SLDS structural class for modal container detection   |
+| 6        | `locator("[data-aura-class='AuraComponentName']")`                  | When no ARIA attribute is available                   |
 
 **Never use:**
 
